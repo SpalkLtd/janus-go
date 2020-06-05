@@ -6,15 +6,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+const httpTimeout = 30 * time.Second
 
 var debug = false
 
@@ -38,11 +43,28 @@ type Gateway struct {
 	sync.Mutex
 
 	conn            *websocket.Conn
+	httpConn        *http.Client
+	httpPath        string
 	nextTransaction uint64
 	transactions    map[uint64]chan interface{}
 
 	sendChan chan []byte
 	writeMu  sync.Mutex
+}
+
+//ConnectHttp ...
+func ConnectHttp(url string) (*Gateway, error) {
+	gateway := new(Gateway)
+	gateway.httpConn = &http.Client{
+		Timeout: httpTimeout,
+	}
+	gateway.httpPath = url
+	gateway.transactions = make(map[uint64]chan interface{})
+	gateway.Sessions = make(map[uint64]*Session)
+
+	gateway.sendChan = make(chan []byte, 100)
+	go gateway.longPoll()
+	return gateway, nil
 }
 
 func Connect(wsURL string) (*Gateway, error) {
@@ -66,9 +88,101 @@ func Connect(wsURL string) (*Gateway, error) {
 	return gateway, nil
 }
 
+//Reconnect ...
+func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (*Handle, *Session, error) {
+	req, ch := newRequest("claim")
+	req["session_id"] = sessionId
+	gateway.send(req, ch)
+
+	msg := <-ch
+	switch msg := msg.(type) {
+	case *SuccessMsg:
+	case *ErrorMsg:
+		return nil, nil, msg
+	}
+
+	// Create new session
+	session := new(Session)
+	session.gateway = gateway
+	session.ID = sessionId
+	session.Handles = make(map[uint64]*Handle)
+	session.Events = make(chan interface{}, 2)
+
+	// Store this session
+	gateway.Lock()
+	gateway.Sessions[sessionId] = session
+	gateway.Unlock()
+
+	var h *Handle
+	var err error
+	if handleId != 0 {
+		h = new(Handle)
+		h.session = session
+		h.ID = handleId
+		h.Events = make(chan interface{}, 8)
+
+		session.Lock()
+		session.Handles[h.ID] = h
+		session.Unlock()
+	} else {
+		h, err = session.Attach(plugin)
+	}
+	return h, session, err
+
+}
+
 // Close closes the underlying connection to the Gateway.
 func (gateway *Gateway) Close() error {
+	if gateway.conn == nil {
+		return nil
+	}
 	return gateway.conn.Close()
+}
+
+func sendWs(conn *websocket.Conn, msg []byte) error {
+	return conn.WriteMessage(websocket.TextMessage, msg)
+}
+
+func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte) ([]byte, error) {
+	var req *http.Request
+	var sessionId, handleId string
+	var err error
+	if sessId, ok := msg["session_id"]; ok && sessId != "" {
+		sessionId, _ = sessId.(string)
+
+	}
+	if hId, ok := msg["handle_id"]; ok && hId != "" {
+		handleId, _ = hId.(string)
+	}
+
+	//make sure we are pointing to the correct endpoint
+	if sessionId != "" {
+		path = path + "/" + sessionId
+		if handleId != "" {
+			path = path + "/" + handleId
+		}
+	}
+
+	if msgType, ok := msg["janus"]; ok && msgType != "info" || msgType != "ping" {
+		req, err = createReq(path, data)
+	} else {
+		req, err = createReq(path, nil)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Error creating request to sfu: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Error sending request to sfu: %v", err)
+	}
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading sfu response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("Error unexpected sfu response code %d: %v", resp.StatusCode, err)
+	}
+	return respBody, nil
 }
 
 func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interface{}) {
@@ -93,10 +207,18 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 		log.WriteTo(os.Stdout)
 	}
 
+	var resp []byte
 	gateway.writeMu.Lock()
-	err = gateway.conn.WriteMessage(websocket.TextMessage, data)
+	if gateway.conn != nil {
+		err = sendWs(gateway.conn, data)
+	} else {
+		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data)
+		//if using the http client we want to send to the recv channel here when we have the response
+		if err == nil {
+			gateway.recvHttpResp(resp)
+		}
+	}
 	gateway.writeMu.Unlock()
-
 	if err != nil {
 		fmt.Printf("conn.Write: %s\n", err)
 		return
@@ -105,6 +227,34 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 
 func passMsg(ch chan interface{}, msg interface{}) {
 	ch <- msg
+}
+
+func (gateway *Gateway) longPoll() {
+	sessionsPolling := make(map[uint64]bool)
+	for {
+		for sessId := range gateway.Sessions {
+			if _, ok := sessionsPolling[sessId]; !ok {
+				sessionsPolling[sessId] = true
+				go func(id uint64) {
+					msg := map[string]interface{}{
+						"session_id": strconv.Itoa(int(id)),
+						"janus":      "ping",
+					}
+					var err error
+					var resp []byte
+					for {
+						resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, nil)
+						if err == nil {
+							gateway.recvHttpResp(resp)
+						} else if strings.Contains(err.Error(), "context deadline exceeded") {
+							return
+						}
+					}
+				}(sessId)
+			}
+		}
+		<-time.After(2 * time.Second)
+	}
 }
 
 func (gateway *Gateway) ping() {
@@ -118,12 +268,92 @@ func (gateway *Gateway) ping() {
 				log.Println("ping:", err)
 				return
 			}
-		}
 	}
 }
 
 func (gateway *Gateway) sendloop() {
 
+}
+
+func (gateway *Gateway) recvHttpResp(resp []byte) {
+	// Decode to Msg struct
+	var base BaseMsg
+	if err := json.Unmarshal(resp, &base); err != nil {
+		fmt.Printf("json.Unmarshal: %s\n", err)
+		return
+	}
+
+	if debug {
+		// log message being sent
+		var log bytes.Buffer
+		json.Indent(&log, resp, "<", "   ")
+		log.Write([]byte("\n"))
+		log.WriteTo(os.Stdout)
+	}
+
+	typeFunc, ok := msgtypes[base.Type]
+	if !ok {
+		fmt.Printf("Unknown message type received!\n")
+		return
+	}
+
+	msg := typeFunc()
+	if err := json.Unmarshal(resp, &msg); err != nil {
+		fmt.Printf("json.Unmarshal: %s\n", err)
+		return
+	}
+
+	// Pass message on from here
+	if base.ID == "" {
+		// Is this a Handle event?
+		if base.Handle == 0 {
+			// Error()
+		} else if base.Type == "trickle" {
+			// Lookup Session
+			gateway.Lock()
+			session := gateway.Sessions[base.Session]
+			gateway.Unlock()
+			if session == nil {
+				fmt.Printf("Unable to deliver message. Session gone?\n")
+				return
+			}
+			// Pass msg to session
+			go passMsg(session.Events, msg)
+		} else {
+			// Lookup Session
+			gateway.Lock()
+			session := gateway.Sessions[base.Session]
+			gateway.Unlock()
+			if session == nil {
+				fmt.Printf("Unable to deliver message. Session gone?\n")
+				return
+			}
+
+			// Lookup Handle
+			session.Lock()
+			handle := session.Handles[base.Handle]
+			session.Unlock()
+			if handle == nil {
+				fmt.Printf("Unable to deliver message. Handle gone?\n")
+				return
+			}
+
+			// Pass msg
+			go passMsg(handle.Events, msg)
+		}
+	} else {
+		id, _ := strconv.ParseUint(base.ID, 10, 64)
+		// Lookup Transaction
+		gateway.Lock()
+		transaction := gateway.transactions[id]
+		gateway.Unlock()
+		if transaction == nil {
+			// Error()
+		}
+
+		// Pass msg
+		go passMsg(transaction, msg)
+	}
 }
 
 func (gateway *Gateway) recv() {
@@ -170,6 +400,17 @@ func (gateway *Gateway) recv() {
 			// Is this a Handle event?
 			if base.Handle == 0 {
 				// Error()
+			} else if base.Type == "trickle" {
+				// Lookup Session
+				gateway.Lock()
+				session := gateway.Sessions[base.Session]
+				gateway.Unlock()
+				if session == nil {
+					fmt.Printf("Unable to deliver message. Session gone?\n")
+					continue
+				}
+				// Pass msg to session
+				go passMsg(session.Events, msg)
 			} else {
 				// Lookup Session
 				gateway.Lock()
@@ -245,7 +486,7 @@ func (gateway *Gateway) Create() (*Session, error) {
 	session.gateway = gateway
 	session.ID = success.Data.ID
 	session.Handles = make(map[uint64]*Handle)
-	session.Events = make(chan interface{}, 2)
+	session.Events = make(chan interface{}, 20)
 
 	// Store this session
 	gateway.Lock()
@@ -483,4 +724,12 @@ func (handle *Handle) Detach() (*AckMsg, error) {
 	handle.session.Unlock()
 
 	return ack, nil
+}
+
+func createReq(path string, body []byte) (*http.Request, error) {
+	if body != nil {
+		return http.NewRequest("POST", path, bytes.NewBuffer(body))
+	}
+
+	return http.NewRequest("GET", path, nil)
 }
