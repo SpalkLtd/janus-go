@@ -5,6 +5,7 @@ package janus
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -215,7 +216,11 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data)
 		//if using the http client we want to send to the recv channel here when we have the response
 		if err == nil {
-			gateway.recvHttpResp(resp)
+			err = gateway.recvHttpResp(resp)
+		}
+		if err != nil {
+			//pass through the error message to the transaction that it failed on
+			passMsg(transaction, &ErrorMsg{ErrorData{Code: 0, Reason: err.Error()}})
 		}
 	}
 	gateway.writeMu.Unlock()
@@ -231,11 +236,21 @@ func passMsg(ch chan interface{}, msg interface{}) {
 
 func (gateway *Gateway) longPoll() {
 	sessionsPolling := make(map[uint64]bool)
+	stopPollingSessions := make(map[uint64]chan bool)
 	for {
 		for sessId := range gateway.Sessions {
+			//if we are not currently polling this session, start
 			if _, ok := sessionsPolling[sessId]; !ok {
 				sessionsPolling[sessId] = true
-				go func(id uint64) {
+				closeCh := make(chan bool)
+				stopPollingSessions[sessId] = closeCh
+
+				go func(id uint64, exitCh chan bool) {
+					defer func() {
+						log.Printf("Exiting long poll for session %d", sessId)
+						sessionsPolling[sessId] = false
+					}()
+					log.Printf("Entering long poll for session %d", sessId)
 					msg := map[string]interface{}{
 						"session_id": strconv.Itoa(int(id)),
 						"janus":      "ping",
@@ -243,6 +258,11 @@ func (gateway *Gateway) longPoll() {
 					var err error
 					var resp []byte
 					for {
+						select {
+						case <-exitCh:
+							return
+						default:
+						}
 						resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, nil)
 						if err == nil {
 							gateway.recvHttpResp(resp)
@@ -250,7 +270,27 @@ func (gateway *Gateway) longPoll() {
 							return
 						}
 					}
-				}(sessId)
+				}(sessId, closeCh)
+			}
+
+			//check to see if there are any sessions we need to stop polling
+			stopPolling := make(map[uint64]bool)
+			for id := range sessionsPolling {
+				stopPolling[id] = true
+				if id == sessId {
+					stopPolling[id] = false
+					continue
+				}
+			}
+
+			for id, stop := range stopPolling {
+				if stop {
+					if closeCh, ok := stopPollingSessions[id]; ok {
+						close(closeCh)
+						sessionsPolling[id] = false
+						delete(stopPollingSessions, id)
+					}
+				}
 			}
 		}
 		<-time.After(2 * time.Second)
@@ -276,12 +316,12 @@ func (gateway *Gateway) sendloop() {
 
 }
 
-func (gateway *Gateway) recvHttpResp(resp []byte) {
+func (gateway *Gateway) recvHttpResp(resp []byte) error {
 	// Decode to Msg struct
 	var base BaseMsg
 	if err := json.Unmarshal(resp, &base); err != nil {
 		fmt.Printf("json.Unmarshal: %s\n", err)
-		return
+		return err
 	}
 
 	if debug {
@@ -295,13 +335,13 @@ func (gateway *Gateway) recvHttpResp(resp []byte) {
 	typeFunc, ok := msgtypes[base.Type]
 	if !ok {
 		fmt.Printf("Unknown message type received!\n")
-		return
+		return errors.New("Unknown base type received")
 	}
 
 	msg := typeFunc()
 	if err := json.Unmarshal(resp, &msg); err != nil {
 		fmt.Printf("json.Unmarshal: %s\n", err)
-		return
+		return err
 	}
 
 	// Pass message on from here
@@ -316,7 +356,7 @@ func (gateway *Gateway) recvHttpResp(resp []byte) {
 			gateway.Unlock()
 			if session == nil {
 				fmt.Printf("Unable to deliver message. Session gone?\n")
-				return
+				return errors.New("Unable to deliver message")
 			}
 			// Pass msg to session
 			go passMsg(session.Events, msg)
@@ -327,7 +367,7 @@ func (gateway *Gateway) recvHttpResp(resp []byte) {
 			gateway.Unlock()
 			if session == nil {
 				fmt.Printf("Unable to deliver message. Session gone?\n")
-				return
+				return errors.New("Unable to deliver message")
 			}
 
 			// Lookup Handle
@@ -336,7 +376,7 @@ func (gateway *Gateway) recvHttpResp(resp []byte) {
 			session.Unlock()
 			if handle == nil {
 				fmt.Printf("Unable to deliver message. Handle gone?\n")
-				return
+				return errors.New("Unable to deliver message")
 			}
 
 			// Pass msg
@@ -355,6 +395,7 @@ func (gateway *Gateway) recvHttpResp(resp []byte) {
 		// Pass msg
 		go passMsg(transaction, msg)
 	}
+	return nil
 }
 
 func (gateway *Gateway) recv() {
