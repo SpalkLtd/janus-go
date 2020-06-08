@@ -268,6 +268,7 @@ func (gateway *Gateway) ping() {
 				log.Println("ping:", err)
 				return
 			}
+		}
 	}
 }
 
