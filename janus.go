@@ -499,8 +499,6 @@ type Session struct {
 
 //LongPollForEvents ...
 func (session *Session) LongPollForEvents() {
-	defer func() {
-	}()
 	msg := map[string]interface{}{
 		"session_id": strconv.Itoa(int(session.id)),
 		"janus":      "ping",
