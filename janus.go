@@ -497,8 +497,8 @@ type Session struct {
 	gateway     *Gateway
 }
 
-//LongPoll ...
-func (session *Session) LongPoll() {
+//LongPollForEvents ...
+func (session *Session) LongPollForEvents() {
 	defer func() {
 	}()
 	msg := map[string]interface{}{
@@ -655,7 +655,6 @@ func (handle *Handle) Request(body interface{}) (*SuccessMsg, error) {
 	handle.send(req, ch)
 
 	msg := <-ch
-
 	switch msg := msg.(type) {
 	case *SuccessMsg:
 		return msg, nil
