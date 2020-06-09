@@ -2,12 +2,6 @@ package janus
 
 import "sync"
 
-//SetEventsChan used for testing
-func (session *Session) SetEventsChan(evCh chan interface{}) {
-	session.events = evCh
-	return
-}
-
 //NewTestSession used for testing
 func NewTestSession(id uint64, gw *Gateway) *Session {
 	session := new(Session)
