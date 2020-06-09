@@ -64,7 +64,6 @@ func ConnectHttp(url string) (*Gateway, error) {
 	gateway.Sessions = make(map[uint64]*Session)
 
 	gateway.sendChan = make(chan []byte, 100)
-	go gateway.longPoll()
 	return gateway, nil
 }
 
@@ -105,9 +104,11 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	// Create new session
 	session := new(Session)
 	session.gateway = gateway
-	session.ID = sessionId
+	session.id = sessionId
 	session.Handles = make(map[uint64]*Handle)
-	session.Events = make(chan interface{}, 2)
+	session.events = make(chan interface{}, 2)
+	session.CloseCh = make(chan bool)
+	session.CloseChLock = &sync.Mutex{}
 
 	// Store this session
 	gateway.Lock()
@@ -119,11 +120,11 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	if handleId != 0 {
 		h = new(Handle)
 		h.session = session
-		h.ID = handleId
+		h.id = handleId
 		h.Events = make(chan interface{}, 8)
 
 		session.Lock()
-		session.Handles[h.ID] = h
+		session.Handles[h.id] = h
 		session.Unlock()
 	} else {
 		h, err = session.Attach(plugin)
@@ -234,69 +235,6 @@ func passMsg(ch chan interface{}, msg interface{}) {
 	ch <- msg
 }
 
-func (gateway *Gateway) longPoll() {
-	sessionsPolling := make(map[uint64]bool)
-	stopPollingSessions := make(map[uint64]chan bool)
-	for {
-		for sessId := range gateway.Sessions {
-			//if we are not currently polling this session, start
-			if _, ok := sessionsPolling[sessId]; !ok {
-				sessionsPolling[sessId] = true
-				closeCh := make(chan bool)
-				stopPollingSessions[sessId] = closeCh
-
-				go func(id uint64, exitCh chan bool) {
-					defer func() {
-						log.Printf("Exiting long poll for session %d", sessId)
-						sessionsPolling[sessId] = false
-					}()
-					log.Printf("Entering long poll for session %d", sessId)
-					msg := map[string]interface{}{
-						"session_id": strconv.Itoa(int(id)),
-						"janus":      "ping",
-					}
-					var err error
-					var resp []byte
-					for {
-						select {
-						case <-exitCh:
-							return
-						default:
-						}
-						resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, nil)
-						if err == nil {
-							gateway.recvHttpResp(resp)
-						} else if strings.Contains(err.Error(), "context deadline exceeded") {
-							return
-						}
-					}
-				}(sessId, closeCh)
-			}
-
-			//check to see if there are any sessions we need to stop polling
-			stopPolling := make(map[uint64]bool)
-			for id := range sessionsPolling {
-				stopPolling[id] = true
-				if id == sessId {
-					stopPolling[id] = false
-					continue
-				}
-			}
-
-			for id, stop := range stopPolling {
-				if stop {
-					if closeCh, ok := stopPollingSessions[id]; ok {
-						close(closeCh)
-						sessionsPolling[id] = false
-						delete(stopPollingSessions, id)
-					}
-				}
-			}
-		}
-		<-time.After(2 * time.Second)
-	}
-}
-
 func (gateway *Gateway) ping() {
 	ticker := time.NewTicker(time.Second * 30)
 	defer ticker.Stop()
@@ -359,7 +297,7 @@ func (gateway *Gateway) recvHttpResp(resp []byte) error {
 				return errors.New("Unable to deliver message")
 			}
 			// Pass msg to session
-			go passMsg(session.Events, msg)
+			go passMsg(session.events, msg)
 		} else {
 			// Lookup Session
 			gateway.Lock()
@@ -452,7 +390,7 @@ func (gateway *Gateway) recv() {
 					continue
 				}
 				// Pass msg to session
-				go passMsg(session.Events, msg)
+				go passMsg(session.events, msg)
 			} else {
 				// Lookup Session
 				gateway.Lock()
@@ -526,13 +464,15 @@ func (gateway *Gateway) Create() (*Session, error) {
 	// Create new session
 	session := new(Session)
 	session.gateway = gateway
-	session.ID = success.Data.ID
+	session.id = success.Data.ID
 	session.Handles = make(map[uint64]*Handle)
-	session.Events = make(chan interface{}, 20)
+	session.events = make(chan interface{}, 20)
+	session.CloseCh = make(chan bool)
+	session.CloseChLock = &sync.Mutex{}
 
 	// Store this session
 	gateway.Lock()
-	gateway.Sessions[session.ID] = session
+	gateway.Sessions[session.id] = session
 	gateway.Unlock()
 
 	return session, nil
@@ -540,33 +480,60 @@ func (gateway *Gateway) Create() (*Session, error) {
 
 // Session represents a session instance on the Janus Gateway.
 type Session struct {
-	// ID is the session_id of this session
-	ID uint64
+	// id is the session_id of this session
+	id uint64
 
 	// Handles is a map of plugin handles within this session
 	Handles map[uint64]*Handle
 
-	Events chan interface{}
+	events chan interface{}
 
 	// Access to the Handles map should be synchronized with the Session.Lock()
 	// and Session.Unlock() methods provided by the embeded sync.Mutex.
 	sync.Mutex
 
-	gateway *Gateway
+	CloseCh     chan bool
+	CloseChLock *sync.Mutex
+	gateway     *Gateway
+}
+
+//LongPoll ...
+func (session *Session) LongPoll() {
+	defer func() {
+	}()
+	msg := map[string]interface{}{
+		"session_id": strconv.Itoa(int(session.id)),
+		"janus":      "ping",
+	}
+	var err error
+	var resp []byte
+	for {
+		select {
+		case <-session.CloseCh:
+			return
+		default:
+		}
+		resp, err = sendHttp(session.gateway.httpConn, session.gateway.httpPath, msg, nil)
+		if err == nil {
+			session.gateway.recvHttpResp(resp)
+		} else if strings.Contains(err.Error(), "context deadline exceeded") {
+			return
+		}
+	}
 }
 
 //GetId ...
 func (session *Session) GetId() uint64 {
-	return session.ID
+	return session.id
 }
 
-//ListenToEventsChan ...
-func (session *Session) ListenToEventsChan() chan interface{} {
-	return session.Events
+//Events ...
+func (session *Session) Events() <-chan interface{} {
+	return session.events
 }
 
 func (session *Session) send(msg map[string]interface{}, transaction chan interface{}) {
-	msg["session_id"] = session.ID
+	msg["session_id"] = session.id
 	session.gateway.send(msg, transaction)
 }
 
@@ -589,11 +556,11 @@ func (session *Session) Attach(plugin string) (*Handle, error) {
 
 	handle := new(Handle)
 	handle.session = session
-	handle.ID = success.Data.ID
+	handle.id = success.Data.ID
 	handle.Events = make(chan interface{}, 8)
 
 	session.Lock()
-	session.Handles[handle.ID] = handle
+	session.Handles[handle.id] = handle
 	session.Unlock()
 
 	return handle, nil
@@ -634,16 +601,27 @@ func (session *Session) Destroy() (*AckMsg, error) {
 
 	// Remove this session from the gateway
 	session.gateway.Lock()
-	delete(session.gateway.Sessions, session.ID)
+	delete(session.gateway.Sessions, session.id)
 	session.gateway.Unlock()
 
 	return ack, nil
 }
 
+//StopPoll ...
+func (session *Session) StopPoll() {
+	session.CloseChLock.Lock()
+	defer session.CloseChLock.Unlock()
+	select {
+	case <-session.CloseCh:
+	default:
+		close(session.CloseCh)
+	}
+}
+
 // Handle represents a handle to a plugin instance on the Gateway.
 type Handle struct {
-	// ID is the handle_id of this plugin handle
-	ID uint64
+	// id is the handle_id of this plugin handle
+	id uint64
 
 	// Type   // pub  or sub
 	Type string
@@ -660,11 +638,11 @@ type Handle struct {
 
 //GetId ...
 func (handle *Handle) GetId() uint64 {
-	return handle.ID
+	return handle.id
 }
 
 func (handle *Handle) send(msg map[string]interface{}, transaction chan interface{}) {
-	msg["handle_id"] = handle.ID
+	msg["handle_id"] = handle.id
 	handle.session.send(msg, transaction)
 }
 
@@ -777,7 +755,7 @@ func (handle *Handle) Detach() (*AckMsg, error) {
 
 	// Remove this handle from the session
 	handle.session.Lock()
-	delete(handle.session.Handles, handle.ID)
+	delete(handle.session.Handles, handle.id)
 	handle.session.Unlock()
 
 	return ack, nil
