@@ -555,6 +555,16 @@ type Session struct {
 	gateway *Gateway
 }
 
+//GetId ...
+func (session *Session) GetId() uint64 {
+	return session.ID
+}
+
+//ListenToEventsChan ...
+func (session *Session) ListenToEventsChan() chan interface{} {
+	return session.Events
+}
+
 func (session *Session) send(msg map[string]interface{}, transaction chan interface{}) {
 	msg["session_id"] = session.ID
 	session.gateway.send(msg, transaction)
@@ -646,6 +656,11 @@ type Handle struct {
 	Events chan interface{}
 
 	session *Session
+}
+
+//GetId ...
+func (handle *Handle) GetId() uint64 {
+	return handle.ID
 }
 
 func (handle *Handle) send(msg map[string]interface{}, transaction chan interface{}) {
