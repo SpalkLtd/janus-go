@@ -88,6 +88,18 @@ func Connect(wsURL string) (*Gateway, error) {
 	return gateway, nil
 }
 
+//NewSession (ONLY CALL DIRECTLY IN TESTS)
+func NewSession(id uint64, gw *Gateway) *Session {
+	session := new(Session)
+	session.id = id
+	session.events = make(chan interface{}, 20)
+	session.gateway = gw
+	session.Handles = make(map[uint64]*Handle)
+	session.CloseCh = make(chan bool)
+	session.CloseChLock = &sync.Mutex{}
+	return session
+}
+
 //Reconnect ...
 func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (*Handle, *Session, error) {
 	req, ch := newRequest("claim")
@@ -102,13 +114,7 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	}
 
 	// Create new session
-	session := new(Session)
-	session.gateway = gateway
-	session.id = sessionId
-	session.Handles = make(map[uint64]*Handle)
-	session.events = make(chan interface{}, 2)
-	session.CloseCh = make(chan bool)
-	session.CloseChLock = &sync.Mutex{}
+	session := NewSession(sessionId, gateway)
 
 	// Store this session
 	gateway.Lock()
@@ -118,10 +124,7 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	var h *Handle
 	var err error
 	if handleId != 0 {
-		h = new(Handle)
-		h.session = session
-		h.id = handleId
-		h.Events = make(chan interface{}, 8)
+		h = NewHandle(handleId, session)
 
 		session.Lock()
 		session.Handles[h.id] = h
@@ -462,13 +465,7 @@ func (gateway *Gateway) Create() (*Session, error) {
 	}
 
 	// Create new session
-	session := new(Session)
-	session.gateway = gateway
-	session.id = success.Data.ID
-	session.Handles = make(map[uint64]*Handle)
-	session.events = make(chan interface{}, 20)
-	session.CloseCh = make(chan bool)
-	session.CloseChLock = &sync.Mutex{}
+	session := NewSession(success.Data.ID, gateway)
 
 	// Store this session
 	gateway.Lock()
@@ -535,6 +532,15 @@ func (session *Session) send(msg map[string]interface{}, transaction chan interf
 	session.gateway.send(msg, transaction)
 }
 
+//NewHandle (ONLY CALL DIRECTLY IN TESTS)
+func NewHandle(id uint64, sess *Session) *Handle {
+	handle := new(Handle)
+	handle.id = id
+	handle.session = sess
+	handle.Events = make(chan interface{}, 8)
+	return handle
+}
+
 // Attach sends an attach request to the Gateway within this session.
 // plugin should be the unique string of the plugin to attach to.
 // On success, a new Handle will be returned and error will be nil.
@@ -552,10 +558,7 @@ func (session *Session) Attach(plugin string) (*Handle, error) {
 		return nil, msg
 	}
 
-	handle := new(Handle)
-	handle.session = session
-	handle.id = success.Data.ID
-	handle.Events = make(chan interface{}, 8)
+	handle := NewHandle(success.Data.ID, session)
 
 	session.Lock()
 	session.Handles[handle.id] = handle
