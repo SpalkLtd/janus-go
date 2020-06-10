@@ -88,8 +88,8 @@ func Connect(wsURL string) (*Gateway, error) {
 	return gateway, nil
 }
 
-//_NewSessionTestHelper used for test session
-func _NewSessionTestHelper(id uint64, gw *Gateway) *Session {
+//NewSession_testHelper used for test session
+func NewSession_testHelper(id uint64, gw *Gateway) *Session {
 	return newSession(id, gw)
 }
 
@@ -536,8 +536,8 @@ func (session *Session) send(msg map[string]interface{}, transaction chan interf
 	session.gateway.send(msg, transaction)
 }
 
-//_NewHandleTestHelper used for test handles
-func _NewHandleTestHelper(id uint64, sess *Session) *Handle {
+//NewHandle_testHelper used for test handles
+func NewHandle_testHelper(id uint64, sess *Session) *Handle {
 	return newHandle(id, sess)
 }
 
