@@ -88,8 +88,12 @@ func Connect(wsURL string) (*Gateway, error) {
 	return gateway, nil
 }
 
-//NewSession (ONLY CALL DIRECTLY IN TESTS)
-func NewSession(id uint64, gw *Gateway) *Session {
+//_NewSessionTestHelper used for test session
+func _NewSessionTestHelper(id uint64, gw *Gateway) *Session {
+	return newSession(id, gw)
+}
+
+func newSession(id uint64, gw *Gateway) *Session {
 	session := new(Session)
 	session.id = id
 	session.events = make(chan interface{}, 20)
@@ -114,7 +118,7 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	}
 
 	// Create new session
-	session := NewSession(sessionId, gateway)
+	session := newSession(sessionId, gateway)
 
 	// Store this session
 	gateway.Lock()
@@ -124,7 +128,7 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	var h *Handle
 	var err error
 	if handleId != 0 {
-		h = NewHandle(handleId, session)
+		h = newHandle(handleId, session)
 
 		session.Lock()
 		session.Handles[h.id] = h
@@ -465,7 +469,7 @@ func (gateway *Gateway) Create() (*Session, error) {
 	}
 
 	// Create new session
-	session := NewSession(success.Data.ID, gateway)
+	session := newSession(success.Data.ID, gateway)
 
 	// Store this session
 	gateway.Lock()
@@ -532,8 +536,12 @@ func (session *Session) send(msg map[string]interface{}, transaction chan interf
 	session.gateway.send(msg, transaction)
 }
 
-//NewHandle (ONLY CALL DIRECTLY IN TESTS)
-func NewHandle(id uint64, sess *Session) *Handle {
+//_NewHandleTestHelper used for test handles
+func _NewHandleTestHelper(id uint64, sess *Session) *Handle {
+	return newHandle(id, sess)
+}
+
+func newHandle(id uint64, sess *Session) *Handle {
 	handle := new(Handle)
 	handle.id = id
 	handle.session = sess
@@ -558,7 +566,7 @@ func (session *Session) Attach(plugin string) (*Handle, error) {
 		return nil, msg
 	}
 
-	handle := NewHandle(success.Data.ID, session)
+	handle := newHandle(success.Data.ID, session)
 
 	session.Lock()
 	session.Handles[handle.id] = handle
