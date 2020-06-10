@@ -5,16 +5,22 @@ package janus
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+const httpTimeout = 30 * time.Second
 
 var debug = false
 
@@ -38,11 +44,27 @@ type Gateway struct {
 	sync.Mutex
 
 	conn            *websocket.Conn
+	httpConn        *http.Client
+	httpPath        string
 	nextTransaction uint64
 	transactions    map[uint64]chan interface{}
 
 	sendChan chan []byte
 	writeMu  sync.Mutex
+}
+
+//ConnectHttp ...
+func ConnectHttp(url string) (*Gateway, error) {
+	gateway := new(Gateway)
+	gateway.httpConn = &http.Client{
+		Timeout: httpTimeout,
+	}
+	gateway.httpPath = url
+	gateway.transactions = make(map[uint64]chan interface{})
+	gateway.Sessions = make(map[uint64]*Session)
+
+	gateway.sendChan = make(chan []byte, 100)
+	return gateway, nil
 }
 
 func Connect(wsURL string) (*Gateway, error) {
@@ -66,9 +88,110 @@ func Connect(wsURL string) (*Gateway, error) {
 	return gateway, nil
 }
 
+//NewSession_testHelper used for test session
+func NewSession_testHelper(id uint64, gw *Gateway) *Session {
+	return newSession(id, gw)
+}
+
+func newSession(id uint64, gw *Gateway) *Session {
+	session := new(Session)
+	session.id = id
+	session.events = make(chan interface{}, 20)
+	session.gateway = gw
+	session.Handles = make(map[uint64]*Handle)
+	session.CloseCh = make(chan bool)
+	session.CloseChLock = &sync.Mutex{}
+	return session
+}
+
+//Reconnect ...
+func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (*Handle, *Session, error) {
+	req, ch := newRequest("claim")
+	req["session_id"] = sessionId
+	gateway.send(req, ch)
+
+	msg := <-ch
+	switch msg := msg.(type) {
+	case *SuccessMsg:
+	case *ErrorMsg:
+		return nil, nil, msg
+	}
+
+	// Create new session
+	session := newSession(sessionId, gateway)
+
+	// Store this session
+	gateway.Lock()
+	gateway.Sessions[sessionId] = session
+	gateway.Unlock()
+
+	var h *Handle
+	var err error
+	if handleId != 0 {
+		h = newHandle(handleId, session)
+
+		session.Lock()
+		session.Handles[h.id] = h
+		session.Unlock()
+	} else {
+		h, err = session.Attach(plugin)
+	}
+	return h, session, err
+
+}
+
 // Close closes the underlying connection to the Gateway.
 func (gateway *Gateway) Close() error {
+	if gateway.conn == nil {
+		return nil
+	}
 	return gateway.conn.Close()
+}
+
+func sendWs(conn *websocket.Conn, msg []byte) error {
+	return conn.WriteMessage(websocket.TextMessage, msg)
+}
+
+func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte) ([]byte, error) {
+	var req *http.Request
+	var sessionId, handleId string
+	var err error
+	if sessId, ok := msg["session_id"]; ok && sessId != "" {
+		sessionId, _ = sessId.(string)
+
+	}
+	if hId, ok := msg["handle_id"]; ok && hId != "" {
+		handleId, _ = hId.(string)
+	}
+
+	//make sure we are pointing to the correct endpoint
+	if sessionId != "" {
+		path = path + "/" + sessionId
+		if handleId != "" {
+			path = path + "/" + handleId
+		}
+	}
+
+	if msgType, ok := msg["janus"]; ok && msgType != "info" || msgType != "ping" {
+		req, err = createReq(path, data)
+	} else {
+		req, err = createReq(path, nil)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Error creating request to sfu: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Error sending request to sfu: %v", err)
+	}
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Error reading sfu response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("Error unexpected sfu response code %d: %v", resp.StatusCode, err)
+	}
+	return respBody, nil
 }
 
 func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interface{}) {
@@ -93,10 +216,22 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 		log.WriteTo(os.Stdout)
 	}
 
+	var resp []byte
 	gateway.writeMu.Lock()
-	err = gateway.conn.WriteMessage(websocket.TextMessage, data)
+	if gateway.conn != nil {
+		err = sendWs(gateway.conn, data)
+	} else {
+		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data)
+		//if using the http client we want to send to the recv channel here when we have the response
+		if err == nil {
+			err = gateway.recvHttpResp(resp)
+		}
+		if err != nil {
+			//pass through the error message to the transaction that it failed on
+			passMsg(transaction, &ErrorMsg{ErrorData{Code: 0, Reason: err.Error()}})
+		}
+	}
 	gateway.writeMu.Unlock()
-
 	if err != nil {
 		fmt.Printf("conn.Write: %s\n", err)
 		return
@@ -124,6 +259,88 @@ func (gateway *Gateway) ping() {
 
 func (gateway *Gateway) sendloop() {
 
+}
+
+func (gateway *Gateway) recvHttpResp(resp []byte) error {
+	// Decode to Msg struct
+	var base BaseMsg
+	if err := json.Unmarshal(resp, &base); err != nil {
+		fmt.Printf("json.Unmarshal: %s\n", err)
+		return err
+	}
+
+	if debug {
+		// log message being sent
+		var log bytes.Buffer
+		json.Indent(&log, resp, "<", "   ")
+		log.Write([]byte("\n"))
+		log.WriteTo(os.Stdout)
+	}
+
+	typeFunc, ok := msgtypes[base.Type]
+	if !ok {
+		fmt.Printf("Unknown message type received!\n")
+		return errors.New("Unknown base type received")
+	}
+
+	msg := typeFunc()
+	if err := json.Unmarshal(resp, &msg); err != nil {
+		fmt.Printf("json.Unmarshal: %s\n", err)
+		return err
+	}
+
+	// Pass message on from here
+	if base.ID == "" {
+		// Is this a Handle event?
+		if base.Handle == 0 {
+			// Error()
+		} else if base.Type == "trickle" {
+			// Lookup Session
+			gateway.Lock()
+			session := gateway.Sessions[base.Session]
+			gateway.Unlock()
+			if session == nil {
+				fmt.Printf("Unable to deliver message. Session gone?\n")
+				return errors.New("Unable to deliver message")
+			}
+			// Pass msg to session
+			go passMsg(session.events, msg)
+		} else {
+			// Lookup Session
+			gateway.Lock()
+			session := gateway.Sessions[base.Session]
+			gateway.Unlock()
+			if session == nil {
+				fmt.Printf("Unable to deliver message. Session gone?\n")
+				return errors.New("Unable to deliver message")
+			}
+
+			// Lookup Handle
+			session.Lock()
+			handle := session.Handles[base.Handle]
+			session.Unlock()
+			if handle == nil {
+				fmt.Printf("Unable to deliver message. Handle gone?\n")
+				return errors.New("Unable to deliver message")
+			}
+
+			// Pass msg
+			go passMsg(handle.Events, msg)
+		}
+	} else {
+		id, _ := strconv.ParseUint(base.ID, 10, 64)
+		// Lookup Transaction
+		gateway.Lock()
+		transaction := gateway.transactions[id]
+		gateway.Unlock()
+		if transaction == nil {
+			// Error()
+		}
+
+		// Pass msg
+		go passMsg(transaction, msg)
+	}
+	return nil
 }
 
 func (gateway *Gateway) recv() {
@@ -170,6 +387,17 @@ func (gateway *Gateway) recv() {
 			// Is this a Handle event?
 			if base.Handle == 0 {
 				// Error()
+			} else if base.Type == "trickle" {
+				// Lookup Session
+				gateway.Lock()
+				session := gateway.Sessions[base.Session]
+				gateway.Unlock()
+				if session == nil {
+					fmt.Printf("Unable to deliver message. Session gone?\n")
+					continue
+				}
+				// Pass msg to session
+				go passMsg(session.events, msg)
 			} else {
 				// Lookup Session
 				gateway.Lock()
@@ -241,15 +469,11 @@ func (gateway *Gateway) Create() (*Session, error) {
 	}
 
 	// Create new session
-	session := new(Session)
-	session.gateway = gateway
-	session.ID = success.Data.ID
-	session.Handles = make(map[uint64]*Handle)
-	session.Events = make(chan interface{}, 2)
+	session := newSession(success.Data.ID, gateway)
 
 	// Store this session
 	gateway.Lock()
-	gateway.Sessions[session.ID] = session
+	gateway.Sessions[session.id] = session
 	gateway.Unlock()
 
 	return session, nil
@@ -257,24 +481,72 @@ func (gateway *Gateway) Create() (*Session, error) {
 
 // Session represents a session instance on the Janus Gateway.
 type Session struct {
-	// ID is the session_id of this session
-	ID uint64
+	// id is the session_id of this session
+	id uint64
 
 	// Handles is a map of plugin handles within this session
 	Handles map[uint64]*Handle
 
-	Events chan interface{}
+	events chan interface{}
 
 	// Access to the Handles map should be synchronized with the Session.Lock()
 	// and Session.Unlock() methods provided by the embeded sync.Mutex.
 	sync.Mutex
 
-	gateway *Gateway
+	CloseCh     chan bool
+	CloseChLock *sync.Mutex
+	gateway     *Gateway
+}
+
+//LongPollForEvents ...
+func (session *Session) LongPollForEvents() {
+	msg := map[string]interface{}{
+		"session_id": strconv.Itoa(int(session.id)),
+		"janus":      "ping",
+	}
+	var err error
+	var resp []byte
+	for {
+		select {
+		case <-session.CloseCh:
+			return
+		default:
+		}
+		resp, err = sendHttp(session.gateway.httpConn, session.gateway.httpPath, msg, nil)
+		if err == nil {
+			session.gateway.recvHttpResp(resp)
+		} else if strings.Contains(err.Error(), "context deadline exceeded") {
+			return
+		}
+	}
+}
+
+//GetId ...
+func (session *Session) GetId() uint64 {
+	return session.id
+}
+
+//Events ...
+func (session *Session) Events() <-chan interface{} {
+	return session.events
 }
 
 func (session *Session) send(msg map[string]interface{}, transaction chan interface{}) {
-	msg["session_id"] = session.ID
+	msg["session_id"] = session.id
 	session.gateway.send(msg, transaction)
+}
+
+//NewHandle_testHelper used for test handles
+func NewHandle_testHelper(id uint64, sess *Session) *Handle {
+	return newHandle(id, sess)
+}
+
+func newHandle(id uint64, sess *Session) *Handle {
+	handle := new(Handle)
+	handle.id = id
+	handle.session = sess
+	handle.Events = make(chan interface{}, 8)
+	return handle
 }
 
 // Attach sends an attach request to the Gateway within this session.
@@ -294,13 +566,10 @@ func (session *Session) Attach(plugin string) (*Handle, error) {
 		return nil, msg
 	}
 
-	handle := new(Handle)
-	handle.session = session
-	handle.ID = success.Data.ID
-	handle.Events = make(chan interface{}, 8)
+	handle := newHandle(success.Data.ID, session)
 
 	session.Lock()
-	session.Handles[handle.ID] = handle
+	session.Handles[handle.id] = handle
 	session.Unlock()
 
 	return handle, nil
@@ -341,16 +610,27 @@ func (session *Session) Destroy() (*AckMsg, error) {
 
 	// Remove this session from the gateway
 	session.gateway.Lock()
-	delete(session.gateway.Sessions, session.ID)
+	delete(session.gateway.Sessions, session.id)
 	session.gateway.Unlock()
 
 	return ack, nil
 }
 
+//StopPoll ...
+func (session *Session) StopPoll() {
+	session.CloseChLock.Lock()
+	defer session.CloseChLock.Unlock()
+	select {
+	case <-session.CloseCh:
+	default:
+		close(session.CloseCh)
+	}
+}
+
 // Handle represents a handle to a plugin instance on the Gateway.
 type Handle struct {
-	// ID is the handle_id of this plugin handle
-	ID uint64
+	// id is the handle_id of this plugin handle
+	id uint64
 
 	// Type   // pub  or sub
 	Type string
@@ -365,8 +645,13 @@ type Handle struct {
 	session *Session
 }
 
+//GetId ...
+func (handle *Handle) GetId() uint64 {
+	return handle.id
+}
+
 func (handle *Handle) send(msg map[string]interface{}, transaction chan interface{}) {
-	msg["handle_id"] = handle.ID
+	msg["handle_id"] = handle.id
 	handle.session.send(msg, transaction)
 }
 
@@ -379,7 +664,6 @@ func (handle *Handle) Request(body interface{}) (*SuccessMsg, error) {
 	handle.send(req, ch)
 
 	msg := <-ch
-
 	switch msg := msg.(type) {
 	case *SuccessMsg:
 		return msg, nil
@@ -479,8 +763,16 @@ func (handle *Handle) Detach() (*AckMsg, error) {
 
 	// Remove this handle from the session
 	handle.session.Lock()
-	delete(handle.session.Handles, handle.ID)
+	delete(handle.session.Handles, handle.id)
 	handle.session.Unlock()
 
 	return ack, nil
+}
+
+func createReq(path string, body []byte) (*http.Request, error) {
+	if body != nil {
+		return http.NewRequest("POST", path, bytes.NewBuffer(body))
+	}
+
+	return http.NewRequest("GET", path, nil)
 }
