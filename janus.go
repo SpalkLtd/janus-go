@@ -93,6 +93,12 @@ func NewSession_testHelper(id uint64, gw *Gateway) *Session {
 	return newSession(id, gw)
 }
 
+//PassMessage_testHelper so we can trigger certain events for tests
+func PassMessage_testHelper(s *Session, msg interface{}) {
+	passMsg(s.events, msg)
+	return
+}
+
 func newSession(id uint64, gw *Gateway) *Session {
 	session := new(Session)
 	session.id = id
