@@ -34,6 +34,14 @@ func newRequest(method string) (map[string]interface{}, chan interface{}) {
 	return req, make(chan interface{})
 }
 
+//IGatewaway ...
+type IGatewaway interface {
+	Reconnect(sessionId uint64, handleId uint64, plugin string) (IHandle, ISession, error)
+	Info() (*InfoMsg, error)
+	Create() (ISession, error)
+	Close() error
+}
+
 // Gateway represents a connection to an instance of the Janus Gateway.
 type Gateway struct {
 	// Sessions is a map of the currently active sessions to the gateway.
@@ -88,17 +96,6 @@ func Connect(wsURL string) (*Gateway, error) {
 	return gateway, nil
 }
 
-//NewSession_testHelper used for test session
-func NewSession_testHelper(id uint64, gw *Gateway) *Session {
-	return newSession(id, gw)
-}
-
-//PassMessage_testHelper so we can trigger certain events for tests
-func PassMessage_testHelper(s *Session, msg interface{}) {
-	passMsg(s.events, msg)
-	return
-}
-
 func newSession(id uint64, gw *Gateway) *Session {
 	session := new(Session)
 	session.id = id
@@ -111,7 +108,7 @@ func newSession(id uint64, gw *Gateway) *Session {
 }
 
 //Reconnect ...
-func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (*Handle, *Session, error) {
+func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (IHandle, ISession, error) {
 	req, ch := newRequest("claim")
 	req["session_id"] = sessionId
 	gateway.send(req, ch)
@@ -131,17 +128,15 @@ func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin stri
 	gateway.Sessions[sessionId] = session
 	gateway.Unlock()
 
-	var h *Handle
-	var err error
 	if handleId != 0 {
-		h = newHandle(handleId, session)
+		h := newHandle(handleId, session)
 
 		session.Lock()
 		session.Handles[h.id] = h
 		session.Unlock()
-	} else {
-		h, err = session.Attach(plugin)
+		return h, session, nil
 	}
+	h, err := session.Attach(plugin)
 	return h, session, err
 
 }
@@ -300,7 +295,7 @@ func (gateway *Gateway) recvHttpResp(resp []byte) error {
 		// Is this a Handle event?
 		if base.Handle == 0 {
 			// Error()
-		} else if base.Type == "trickle" {
+		} else if base.Type == "trickle" || base.Type == "webrtcup" {
 			// Lookup Session
 			gateway.Lock()
 			session := gateway.Sessions[base.Session]
@@ -393,7 +388,7 @@ func (gateway *Gateway) recv() {
 			// Is this a Handle event?
 			if base.Handle == 0 {
 				// Error()
-			} else if base.Type == "trickle" {
+			} else if base.Type == "trickle" || base.Type == "webrtcup" {
 				// Lookup Session
 				gateway.Lock()
 				session := gateway.Sessions[base.Session]
@@ -461,7 +456,7 @@ func (gateway *Gateway) Info() (*InfoMsg, error) {
 
 // Create sends a create request to the Gateway.
 // On success, a new Session will be returned and error will be nil.
-func (gateway *Gateway) Create() (*Session, error) {
+func (gateway *Gateway) Create() (ISession, error) {
 	req, ch := newRequest("create")
 	gateway.send(req, ch)
 
@@ -483,6 +478,16 @@ func (gateway *Gateway) Create() (*Session, error) {
 	gateway.Unlock()
 
 	return session, nil
+}
+
+type ISession interface {
+	GetId() uint64
+	Events() <-chan interface{}
+	Attach(plugin string) (IHandle, error)
+	Destroy() (*AckMsg, error)
+	StopPoll()
+	LongPollForEvents()
+	KeepAlive() (*AckMsg, error)
 }
 
 // Session represents a session instance on the Janus Gateway.
@@ -542,11 +547,6 @@ func (session *Session) send(msg map[string]interface{}, transaction chan interf
 	session.gateway.send(msg, transaction)
 }
 
-//NewHandle_testHelper used for test handles
-func NewHandle_testHelper(id uint64, sess *Session) *Handle {
-	return newHandle(id, sess)
-}
-
 func newHandle(id uint64, sess *Session) *Handle {
 	handle := new(Handle)
 	handle.id = id
@@ -558,7 +558,7 @@ func newHandle(id uint64, sess *Session) *Handle {
 // Attach sends an attach request to the Gateway within this session.
 // plugin should be the unique string of the plugin to attach to.
 // On success, a new Handle will be returned and error will be nil.
-func (session *Session) Attach(plugin string) (*Handle, error) {
+func (session *Session) Attach(plugin string) (IHandle, error) {
 	req, ch := newRequest("attach")
 	req["plugin"] = plugin
 	session.send(req, ch)
@@ -631,6 +631,16 @@ func (session *Session) StopPoll() {
 	default:
 		close(session.CloseCh)
 	}
+}
+
+//IHandle ...
+type IHandle interface {
+	GetId() uint64
+	Request(body interface{}) (*SuccessMsg, error)
+	Message(body, jsep interface{}) (*EventMsg, error)
+	Trickle(candidate interface{}) (*AckMsg, error)
+	TrickleMany(candidates interface{}) (*AckMsg, error)
+	Detach() (*AckMsg, error)
 }
 
 // Handle represents a handle to a plugin instance on the Gateway.
