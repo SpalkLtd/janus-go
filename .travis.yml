@@ -1,0 +1,5 @@
+language: go
+go:
+- 1.10.x
+script:
+  - cd $GOPATH/src/github.com/SpalkLtd/janus-go && go test -v ./...

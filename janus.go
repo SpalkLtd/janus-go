@@ -173,7 +173,7 @@ func sendHttp(client *http.Client, path string, msg map[string]interface{}, data
 		}
 	}
 
-	if msgType, ok := msg["janus"]; ok && msgType != "info" || msgType != "ping" {
+	if msgType, ok := msg["janus"]; ok && msgType != "info" && msgType != "ping" {
 		req, err = createReq(path, data)
 	} else {
 		req, err = createReq(path, nil)
