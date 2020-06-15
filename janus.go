@@ -34,8 +34,8 @@ func newRequest(method string) (map[string]interface{}, chan interface{}) {
 	return req, make(chan interface{})
 }
 
-//IGatewaway ...
-type IGatewaway interface {
+//IGateway ...
+type IGateway interface {
 	Reconnect(sessionId uint64, handleId uint64, plugin string) (IHandle, ISession, error)
 	Info() (*InfoMsg, error)
 	Create() (ISession, error)
