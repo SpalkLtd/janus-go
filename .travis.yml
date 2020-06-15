@@ -1,0 +1,7 @@
+language: go
+go:
+- 1.14.x
+script:
+  - cd $GOPATH/src/github.com/SpalkLtd/janus-go && go test -coverprofile=coverage.txt 
+after_success:
+- bash <(curl -s https://codecov.io/bash)
