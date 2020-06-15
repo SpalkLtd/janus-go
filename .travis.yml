@@ -2,7 +2,9 @@ language: go
 go:
 - 1.10.x
 script:
-  - cd $GOPATH/src/github.com/SpalkLtd/janus-go && go test -v 
+  - cd $GOPATH/src/github.com/SpalkLtd/janus-go && go test -coverprofile=coverage.txt 
+after_success:
+- bash <(curl -s https://codecov.io/bash)
 env:
   global:
     # AWS_ACCESS_KEY_ID
