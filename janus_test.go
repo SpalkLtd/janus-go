@@ -437,23 +437,25 @@ func TestSessionLongPollStartAndStop(t *testing.T) {
 	sess, err := gw.Create()
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	go sess.LongPollForEvents()
 
 	stopPollWg := sync.WaitGroup{}
 	stopPollWg.Add(1)
+	var hasStoppedPoll bool
 	go func() {
 		select {
 		case <-stopPollCh:
 			sess.StopPoll()
+			hasStoppedPoll = true
 			stopPollWg.Done()
 		case <-time.After(1 * time.Second):
 			log.Println("Error getting the event message")
 			stopPollWg.Done()
 		}
 	}()
+	go sess.LongPollForEvents()
 
 	stopPollWg.Wait()
-	require.Equal(t, 3, transaction)
+	require.True(t, hasStoppedPoll)
 }
 
 func TestSessionKeepAlive(t *testing.T) {
