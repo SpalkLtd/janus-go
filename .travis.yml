@@ -5,3 +5,9 @@ before_install:
 - cd /home/travis/gopath/src/github.com && git clone --depth=1 --branch=master git@github.com:SpalkLtd/spalk-live-sync-api.git SpalkLtd/spalk-live-sync-api
 script:
   - cd $GOPATH/src/github.com/SpalkLtd/janus-go && go test -v ./...
+env:
+  global:
+    # AWS_ACCESS_KEY_ID
+    - secure: "dje1jH0oO1IWFmcoxeKXOnl5gZ/4HrlL4Uu2fCgwd6OdHsHh2jYAxUGSweBDLqwYcj70kWtkxiwULeRBJ8PfX/1y6eoNQdmvFcZLiFoFL0F9MhZe7OU0rAj5ShDQyqOtWprAkZqUGihS/bS3f+Un0LAGa9dA0gY+uoawWSlGQVkzMiG4W1Bk8Yi0/SL1Npyx1HDOCkTsFl+ei+ZPDbL11IVvF3KBHl1U5buRNrpbdAnPmrv93kU7q9dOOsP3VO/NQtsDhhBwVV9AcqPjuCoiRCX9grpTHzKEk/gFU03YkineWTNmX1JBqEv6vmt0aWY13mepFetSi/ZHQYuz+PaLak9r4IXShe3HB91pMJ/s6Lvqs+fyFVj7ch0q8pD7Q4paBrkryIRAjHGnWCh81SiBkhjibpxlzdZIcoNOaN3d/cEwNLgdK7pEOozA7hbqdhnPVbWXokPHc8uF7WVFPx7H+5XX9erT7MyGpgqS9hiDOXgnlrHph0283NPWQRVVKObIZvtYNdXJpEi9PKaAZ7zF4Rx0egZ2PPxGEBCF+IDT9kj9oZZyhy/twZPhfp0c9igybKYzZn1c9kONuaUDC0E3RsMbn7E1RSH6lon6vfC2CCCPA3edYYK5xd+OvthoRHFGrqloLMcI0mxhHIo4xSLwWsccUjrv2j7sG+E4p1CIXik="    # AWS_SECRET_ACCESS_KEY
+    # AWS_SECRET_ACCESS_KEY
+    - secure: "PgtGrqdtWZQB+PBYJhCMcf8UUR/Cw9buqkszKuxSkS5Ii/OaLmLASksqlYQqeyi6BAgKqb+Z5WvPINVlHb6lKcyt1bmityQiic3OIW58b2DE0AX9iCxqHiL+4f6WVgYfP6OxAg0xsWm8ND3VS3uk3PAS9CtvgR1vmWqSEE5edDDpoc325tlq/bz89HTil38RpdPhi9tZ9R2H+lnIUiHpwiGqRU5tjjSFRayByLP4HUpHWsrIWUJ+y4i9Ad9wYDYYBhDBKnQK4BiY+q3I4sWN2jWJJtpb1i/i39Q0fC2MwzfnqRCTnBDH6ojxuC8Y3LSONvfVbtOSyQawQTLsZZ2v7Aa3mqGK0RvMMdiXb2kHyVyS916Sx8lvURl1ASrEC4BMPO4+xSdVjf414xUZpJQ1RUPe7Rlb5cHW8onIDL6AElIhqmVK06T5ENhzVKuW+OcCuU/pspzK2o65z56eyp71Pu9WwErmGvfbflY19TyNoLsGhVRCWjSIU4+zqMNwf9ykYW81GWwzpbtJWruY3qETxEpOgUIv/3EP5TKy+9LJwUzUHdqX7jlG3Vbq/tF7XebqqVPzO06ycFkv+asYOAsJhoM+wcYqKn1+eSOLGFSxYfQHJaK/U5/kgUvzdSyDotwf57SBpmJNglqFfsMpupzi/mqF5dYGOUak/n8LYSoyRQQ="
