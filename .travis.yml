@@ -1,8 +1,6 @@
 language: go
 go:
 - 1.10.x
-before_install:
-- cd /home/travis/gopath/src/github.com && git clone --depth=1 --branch=master git@github.com:SpalkLtd/spalk-live-sync-api.git SpalkLtd/spalk-live-sync-api
 script:
   - cd $GOPATH/src/github.com/SpalkLtd/janus-go && go test -v 
 env:

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/SpalkLtd/janus-go"
-	"github.com/SpalkLtd/spalk-live-sync-api/sfu"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/require"
 )
@@ -939,7 +938,7 @@ func TestHandleTrickle(t *testing.T) {
 	require.Equal(t, uint64(54321), handle.GetId())
 
 	//dont need to check the ack
-	_, err = handle.Trickle(sfu.Candidate{})
+	_, err = handle.Trickle(janus.Candidate{})
 	require.NoError(t, err)
 }
 
@@ -984,7 +983,7 @@ func TestHandleTrickleError(t *testing.T) {
 	require.Equal(t, uint64(54321), handle.GetId())
 
 	//dont need to check the ack
-	_, err = handle.Trickle(sfu.Candidate{})
+	_, err = handle.Trickle(janus.Candidate{})
 	require.Error(t, err)
 	require.Equal(t, "error trickling", err.Error())
 }
@@ -1030,7 +1029,7 @@ func TestHandleTrickleUnexpectedResponse(t *testing.T) {
 	require.Equal(t, uint64(54321), handle.GetId())
 
 	//dont need to check the ack
-	_, err = handle.Trickle(sfu.Candidate{})
+	_, err = handle.Trickle(janus.Candidate{})
 	require.Error(t, err)
 	require.Equal(t, "Unexpected response received to 'trickle' request", err.Error())
 }
@@ -1076,7 +1075,7 @@ func TestHandleTrickleMany(t *testing.T) {
 	require.Equal(t, uint64(54321), handle.GetId())
 
 	//dont need to check the ack
-	_, err = handle.TrickleMany([]sfu.Candidate{})
+	_, err = handle.TrickleMany([]janus.Candidate{})
 	require.NoError(t, err)
 }
 
@@ -1121,7 +1120,7 @@ func TestHandleTrickleManyError(t *testing.T) {
 	require.Equal(t, uint64(54321), handle.GetId())
 
 	//dont need to check the ack
-	_, err = handle.TrickleMany([]sfu.Candidate{})
+	_, err = handle.TrickleMany([]janus.Candidate{})
 	require.Error(t, err)
 	require.Equal(t, "error trickling many", err.Error())
 }
@@ -1167,7 +1166,7 @@ func TestHandleTrickleManyUnexpectedResponse(t *testing.T) {
 	require.Equal(t, uint64(54321), handle.GetId())
 
 	//dont need to check the ack
-	_, err = handle.TrickleMany([]sfu.Candidate{})
+	_, err = handle.TrickleMany([]janus.Candidate{})
 	require.Error(t, err)
 	require.Equal(t, "Unexpected response received to 'trickle' request", err.Error())
 }
