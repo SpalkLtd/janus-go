@@ -4,6 +4,7 @@ package janus
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const httpTimeout = 30 * time.Second
+const httpTimeout = 15 * time.Second
 
 var debug = false
 
@@ -154,7 +155,7 @@ func sendWs(conn *websocket.Conn, msg []byte) error {
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte) ([]byte, error) {
+func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte, closeCh chan bool) ([]byte, error) {
 	var req *http.Request
 	var sessionId, handleId string
 	var err error
@@ -175,13 +176,26 @@ func sendHttp(client *http.Client, path string, msg map[string]interface{}, data
 	}
 
 	if msgType, ok := msg["janus"]; ok && msgType != "info" && msgType != "ping" {
-		req, err = createReq(path, data)
+		req, err = createReq(path, data, context.Background())
 	} else {
-		req, err = createReq(path, nil)
+		ctx := context.Background()
+		if msgType == "ping" && closeCh != nil {
+			//want the ping req to be cancellable
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(context.Background())
+			go func(ch chan bool, cancel context.CancelFunc) {
+				select {
+				case <-ch:
+					cancel()
+				}
+			}(closeCh, cancel)
+		}
+		req, err = createReq(path, nil, ctx)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Error creating request to sfu: %v", err)
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Error sending request to sfu: %v", err)
@@ -223,7 +237,7 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 	if gateway.conn != nil {
 		err = sendWs(gateway.conn, data)
 	} else {
-		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data)
+		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data, nil)
 		//if using the http client we want to send to the recv channel here when we have the response
 		if err == nil {
 			err = gateway.recvHttpResp(resp)
@@ -538,7 +552,7 @@ func (session *Session) LongPollForEvents() {
 
 		respCh := make(chan []byte, 1)
 		errCh := make(chan error, 1)
-		go pingForPoll(respCh, errCh, client, path, msg)
+		go pingForPoll(respCh, errCh, client, path, msg, session.CloseCh)
 
 		select {
 		case <-session.CloseCh:
@@ -556,8 +570,8 @@ func (session *Session) LongPollForEvents() {
 	}
 }
 
-func pingForPoll(respCh chan []byte, errCh chan error, client *http.Client, path string, msg map[string]interface{}) {
-	resp, err := sendHttp(client, path, msg, nil)
+func pingForPoll(respCh chan []byte, errCh chan error, client *http.Client, path string, msg map[string]interface{}, closeCh chan bool) {
+	resp, err := sendHttp(client, path, msg, nil, closeCh)
 	if err != nil {
 		errCh <- err
 		return
@@ -818,10 +832,10 @@ func (handle *Handle) Detach() (*AckMsg, error) {
 	return ack, nil
 }
 
-func createReq(path string, body []byte) (*http.Request, error) {
+func createReq(path string, body []byte, ctx context.Context) (*http.Request, error) {
 	if body != nil {
+		//don't want the post req to be cancellable
 		return http.NewRequest("POST", path, bytes.NewBuffer(body))
 	}
-
-	return http.NewRequest("GET", path, nil)
+	return http.NewRequestWithContext(ctx, "GET", path, nil)
 }
