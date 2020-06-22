@@ -6,3 +6,4 @@
 * add janus Gateway, Session and Handle interface
 * add tests
 * add travis yml
+* close the session.events chan in StopPoll

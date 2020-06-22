@@ -102,6 +102,7 @@ func newSession(id uint64, gw *Gateway) *Session {
 	session.events = make(chan interface{}, 20)
 	session.gateway = gw
 	session.Handles = make(map[uint64]*Handle)
+	session.eventWg = &sync.WaitGroup{}
 	session.CloseCh = make(chan bool)
 	session.CloseChLock = &sync.Mutex{}
 	return session
@@ -239,6 +240,11 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 	}
 }
 
+func passSessionEventsMsg(eventsCh chan interface{}, msg interface{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	eventsCh <- msg
+}
+
 func passMsg(ch chan interface{}, msg interface{}) {
 	ch <- msg
 }
@@ -304,8 +310,10 @@ func (gateway *Gateway) recvHttpResp(resp []byte) error {
 				fmt.Printf("Unable to deliver message. Session gone?\n")
 				return errors.New("Unable to deliver message")
 			}
+
 			// Pass msg to session
-			go passMsg(session.events, msg)
+			session.eventWg.Add(1)
+			go passSessionEventsMsg(session.events, msg, session.eventWg)
 		} else {
 			// Lookup Session
 			gateway.Lock()
@@ -504,6 +512,7 @@ type Session struct {
 	// and Session.Unlock() methods provided by the embeded sync.Mutex.
 	sync.Mutex
 
+	eventWg     *sync.WaitGroup
 	CloseCh     chan bool
 	CloseChLock *sync.Mutex
 	gateway     *Gateway
@@ -520,6 +529,8 @@ func (session *Session) LongPollForEvents() {
 	for {
 		select {
 		case <-session.CloseCh:
+			session.eventWg.Wait()
+			close(session.events)
 			return
 		default:
 		}
