@@ -304,6 +304,15 @@ func (gateway *Gateway) recvHttpResp(resp []byte) error {
 				fmt.Printf("Unable to deliver message. Session gone?\n")
 				return errors.New("Unable to deliver message")
 			}
+			//make sure the events channel hasn't been closed before writing to it
+			select {
+			case <-session.CloseCh:
+				if debug {
+					log.Println("Missed msg due to session poll stopping:", msg)
+				}
+				return errors.New("Session has been closed")
+			default:
+			}
 			// Pass msg to session
 			go passMsg(session.events, msg)
 		} else {
@@ -520,6 +529,7 @@ func (session *Session) LongPollForEvents() {
 	for {
 		select {
 		case <-session.CloseCh:
+			close(session.events)
 			return
 		default:
 		}
