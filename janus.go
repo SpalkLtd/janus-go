@@ -524,8 +524,9 @@ func (session *Session) LongPollForEvents() {
 		"session_id": strconv.Itoa(int(session.id)),
 		"janus":      "ping",
 	}
-	var err error
-	var resp []byte
+	client := session.gateway.httpConn
+	path := session.gateway.httpPath
+
 	for {
 		select {
 		case <-session.CloseCh:
@@ -534,13 +535,34 @@ func (session *Session) LongPollForEvents() {
 			return
 		default:
 		}
-		resp, err = sendHttp(session.gateway.httpConn, session.gateway.httpPath, msg, nil)
-		if err == nil {
+
+		respCh := make(chan []byte, 1)
+		errCh := make(chan error, 1)
+		go pingForPoll(respCh, errCh, client, path, msg)
+
+		select {
+		case <-session.CloseCh:
+			//fallthrough to hit the session.CloseCh read at the beginning of the loop
+			continue
+		case err := <-errCh:
+			if strings.Contains(err.Error(), "context deadline exceeded") {
+				//stop loop as the session has gone away
+				return
+			}
+			continue
+		case resp := <-respCh:
 			session.gateway.recvHttpResp(resp)
-		} else if strings.Contains(err.Error(), "context deadline exceeded") {
-			return
 		}
 	}
+}
+
+func pingForPoll(respCh chan []byte, errCh chan error, client *http.Client, path string, msg map[string]interface{}) {
+	resp, err := sendHttp(client, path, msg, nil)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	respCh <- resp
 }
 
 //GetId ...
