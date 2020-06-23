@@ -4,6 +4,7 @@ package janus
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const httpTimeout = 30 * time.Second
+const httpTimeout = 15 * time.Second
 
 var debug = false
 
@@ -112,7 +113,7 @@ func newSession(id uint64, gw *Gateway) *Session {
 func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (IHandle, ISession, error) {
 	req, ch := newRequest("claim")
 	req["session_id"] = sessionId
-	gateway.send(req, ch)
+	gateway.send(req, ch, nil)
 
 	msg := <-ch
 	switch msg := msg.(type) {
@@ -154,10 +155,8 @@ func sendWs(conn *websocket.Conn, msg []byte) error {
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte) ([]byte, error) {
-	var req *http.Request
+func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte, closeCh chan bool) ([]byte, error) {
 	var sessionId, handleId string
-	var err error
 	if sessId, ok := msg["session_id"]; ok && sessId != "" {
 		sessionId, _ = sessId.(string)
 
@@ -174,14 +173,29 @@ func sendHttp(client *http.Client, path string, msg map[string]interface{}, data
 		}
 	}
 
-	if msgType, ok := msg["janus"]; ok && msgType != "info" && msgType != "ping" {
-		req, err = createReq(path, data)
-	} else {
-		req, err = createReq(path, nil)
+	if msgType, ok := msg["janus"]; ok && msgType == "info" {
+		//need to explicitly set this here or else it will try post to info endpoint rather than get
+		data = nil
 	}
+
+	ctx := context.Background()
+	if closeCh != nil {
+		//want the ping req to be cancellable
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(context.Background())
+		go func(ch chan bool, cancel context.CancelFunc) {
+			select {
+			case <-ch:
+				cancel()
+			}
+		}(closeCh, cancel)
+	}
+
+	req, err := createReq(path, data, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Error creating request to sfu: %v", err)
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Error sending request to sfu: %v", err)
@@ -196,7 +210,7 @@ func sendHttp(client *http.Client, path string, msg map[string]interface{}, data
 	return respBody, nil
 }
 
-func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interface{}) {
+func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interface{}, closeCh chan bool) {
 	id := atomic.AddUint64(&gateway.nextTransaction, 1)
 
 	msg["transaction"] = strconv.FormatUint(id, 10)
@@ -223,7 +237,7 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 	if gateway.conn != nil {
 		err = sendWs(gateway.conn, data)
 	} else {
-		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data)
+		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data, closeCh)
 		//if using the http client we want to send to the recv channel here when we have the response
 		if err == nil {
 			err = gateway.recvHttpResp(resp)
@@ -449,7 +463,7 @@ func (gateway *Gateway) recv() {
 // On success, an InfoMsg will be returned and error will be nil.
 func (gateway *Gateway) Info() (*InfoMsg, error) {
 	req, ch := newRequest("info")
-	gateway.send(req, ch)
+	gateway.send(req, ch, nil)
 
 	msg := <-ch
 	switch msg := msg.(type) {
@@ -466,7 +480,7 @@ func (gateway *Gateway) Info() (*InfoMsg, error) {
 // On success, a new Session will be returned and error will be nil.
 func (gateway *Gateway) Create() (ISession, error) {
 	req, ch := newRequest("create")
-	gateway.send(req, ch)
+	gateway.send(req, ch, nil)
 
 	msg := <-ch
 	var success *SuccessMsg
@@ -524,8 +538,9 @@ func (session *Session) LongPollForEvents() {
 		"session_id": strconv.Itoa(int(session.id)),
 		"janus":      "ping",
 	}
-	var err error
-	var resp []byte
+	client := session.gateway.httpConn
+	path := session.gateway.httpPath
+
 	for {
 		select {
 		case <-session.CloseCh:
@@ -534,13 +549,34 @@ func (session *Session) LongPollForEvents() {
 			return
 		default:
 		}
-		resp, err = sendHttp(session.gateway.httpConn, session.gateway.httpPath, msg, nil)
-		if err == nil {
+
+		respCh := make(chan []byte, 1)
+		errCh := make(chan error, 1)
+		go pingForPoll(respCh, errCh, client, path, msg, session.CloseCh)
+
+		select {
+		case <-session.CloseCh:
+			//fallthrough to hit the session.CloseCh read at the beginning of the loop
+			continue
+		case err := <-errCh:
+			if strings.Contains(err.Error(), "context deadline exceeded") {
+				//stop loop as the session has gone away
+				return
+			}
+			continue
+		case resp := <-respCh:
 			session.gateway.recvHttpResp(resp)
-		} else if strings.Contains(err.Error(), "context deadline exceeded") {
-			return
 		}
 	}
+}
+
+func pingForPoll(respCh chan []byte, errCh chan error, client *http.Client, path string, msg map[string]interface{}, closeCh chan bool) {
+	resp, err := sendHttp(client, path, msg, nil, closeCh)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	respCh <- resp
 }
 
 //GetId ...
@@ -555,7 +591,7 @@ func (session *Session) Events() <-chan interface{} {
 
 func (session *Session) send(msg map[string]interface{}, transaction chan interface{}) {
 	msg["session_id"] = session.id
-	session.gateway.send(msg, transaction)
+	session.gateway.send(msg, transaction, session.CloseCh)
 }
 
 func newHandle(id uint64, sess *Session) *Handle {
@@ -796,10 +832,10 @@ func (handle *Handle) Detach() (*AckMsg, error) {
 	return ack, nil
 }
 
-func createReq(path string, body []byte) (*http.Request, error) {
+func createReq(path string, body []byte, ctx context.Context) (*http.Request, error) {
 	if body != nil {
+		//don't want the post req to be cancellable
 		return http.NewRequest("POST", path, bytes.NewBuffer(body))
 	}
-
-	return http.NewRequest("GET", path, nil)
+	return http.NewRequestWithContext(ctx, "GET", path, nil)
 }
