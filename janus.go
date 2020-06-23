@@ -113,7 +113,7 @@ func newSession(id uint64, gw *Gateway) *Session {
 func (gateway *Gateway) Reconnect(sessionId uint64, handleId uint64, plugin string) (IHandle, ISession, error) {
 	req, ch := newRequest("claim")
 	req["session_id"] = sessionId
-	gateway.send(req, ch)
+	gateway.send(req, ch, nil)
 
 	msg := <-ch
 	switch msg := msg.(type) {
@@ -156,9 +156,7 @@ func sendWs(conn *websocket.Conn, msg []byte) error {
 }
 
 func sendHttp(client *http.Client, path string, msg map[string]interface{}, data []byte, closeCh chan bool) ([]byte, error) {
-	var req *http.Request
 	var sessionId, handleId string
-	var err error
 	if sessId, ok := msg["session_id"]; ok && sessId != "" {
 		sessionId, _ = sessId.(string)
 
@@ -175,23 +173,25 @@ func sendHttp(client *http.Client, path string, msg map[string]interface{}, data
 		}
 	}
 
-	if msgType, ok := msg["janus"]; ok && msgType != "info" && msgType != "ping" {
-		req, err = createReq(path, data, context.Background())
-	} else {
-		ctx := context.Background()
-		if msgType == "ping" && closeCh != nil {
-			//want the ping req to be cancellable
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(context.Background())
-			go func(ch chan bool, cancel context.CancelFunc) {
-				select {
-				case <-ch:
-					cancel()
-				}
-			}(closeCh, cancel)
-		}
-		req, err = createReq(path, nil, ctx)
+	if msgType, ok := msg["janus"]; ok && msgType == "info" {
+		//need to explicitly set this here or else it will try post to info endpoint rather than get
+		data = nil
 	}
+
+	ctx := context.Background()
+	if closeCh != nil {
+		//want the ping req to be cancellable
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(context.Background())
+		go func(ch chan bool, cancel context.CancelFunc) {
+			select {
+			case <-ch:
+				cancel()
+			}
+		}(closeCh, cancel)
+	}
+
+	req, err := createReq(path, data, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Error creating request to sfu: %v", err)
 	}
@@ -210,7 +210,7 @@ func sendHttp(client *http.Client, path string, msg map[string]interface{}, data
 	return respBody, nil
 }
 
-func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interface{}) {
+func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interface{}, closeCh chan bool) {
 	id := atomic.AddUint64(&gateway.nextTransaction, 1)
 
 	msg["transaction"] = strconv.FormatUint(id, 10)
@@ -237,7 +237,7 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 	if gateway.conn != nil {
 		err = sendWs(gateway.conn, data)
 	} else {
-		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data, nil)
+		resp, err = sendHttp(gateway.httpConn, gateway.httpPath, msg, data, closeCh)
 		//if using the http client we want to send to the recv channel here when we have the response
 		if err == nil {
 			err = gateway.recvHttpResp(resp)
@@ -463,7 +463,7 @@ func (gateway *Gateway) recv() {
 // On success, an InfoMsg will be returned and error will be nil.
 func (gateway *Gateway) Info() (*InfoMsg, error) {
 	req, ch := newRequest("info")
-	gateway.send(req, ch)
+	gateway.send(req, ch, nil)
 
 	msg := <-ch
 	switch msg := msg.(type) {
@@ -480,7 +480,7 @@ func (gateway *Gateway) Info() (*InfoMsg, error) {
 // On success, a new Session will be returned and error will be nil.
 func (gateway *Gateway) Create() (ISession, error) {
 	req, ch := newRequest("create")
-	gateway.send(req, ch)
+	gateway.send(req, ch, nil)
 
 	msg := <-ch
 	var success *SuccessMsg
@@ -591,7 +591,7 @@ func (session *Session) Events() <-chan interface{} {
 
 func (session *Session) send(msg map[string]interface{}, transaction chan interface{}) {
 	msg["session_id"] = session.id
-	session.gateway.send(msg, transaction)
+	session.gateway.send(msg, transaction, session.CloseCh)
 }
 
 func newHandle(id uint64, sess *Session) *Handle {
