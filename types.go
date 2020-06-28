@@ -139,3 +139,43 @@ type Candidate struct {
 	Candidate     string `json:"candidate"`
 	Completed     bool   `json:"completed"`
 }
+
+//MessageRequest ...
+type MessageRequest struct {
+	Request string `json:"request"`
+}
+
+//CreateRoomMessage creates the janus video room
+type CreateRoomMessage struct {
+	MessageRequest
+	Room int `json:"room"`
+}
+
+//PublishVideoRoomMessage for janus
+type PublishVideoRoomMessage struct {
+	MessageRequest
+	Audio   bool   `json:"audio"`
+	Video   bool   `json:"video"`
+	Data    bool   `json:"data"`
+	Display string `json:"display"`
+}
+
+//JoinRoomMessage for janus
+type JoinRoomMessage struct {
+	MessageRequest
+	Display string `json:"display"`
+	PType   string `json:"ptype"`
+	Room    int    `json:"room"`
+}
+
+//AttachToPublishersRoomMessage for janus
+type AttachToPublishersRoomMessage struct {
+	JoinRoomMessage
+	Feed int `json:"feed"` //unique ID of the publisher to subscribe to
+}
+
+//ListParticipantsInRoomMessage ...
+type ListParticipantsInRoomMessage struct {
+	MessageRequest
+	Room int `json:"room"`
+}

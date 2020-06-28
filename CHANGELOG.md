@@ -7,3 +7,4 @@
 * add tests
 * add travis yml
 * close the session.events chan in StopPoll
+* declare message types here instead of LS
