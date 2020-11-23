@@ -151,6 +151,43 @@ type CreateRoomMessage struct {
 	Room int `json:"room"`
 }
 
+//CreateStreamingMountPointMessage creates the janus streaming mountpoint
+type CreateStreamingMountPointMessage struct {
+	MessageRequest
+	Audio         bool   `json:"audio"`
+	Video         bool   `json:"video"`
+	Data          bool   `json:"data"`
+	Type          string `json:"type"`
+	Id            int    `json:"id"`
+	AudioPort     string `json:"audioport"`
+	AudioRtcpPort string `json:"audiortcpport"`
+	AudioPt       string `json:"audiopt"`
+	AudioRtpMap   string `json:"audiortpmap"`
+	VideoPort     string `json:"videoport"`
+	VideoRtcpPort string `json:"videortcpport"`
+	VideoPt       string `json:"audiopt"`
+	VideoRtpMap   string `json:"videortpmap"`
+}
+
+//CreateStreamingMountPointMultiStreamMessage ...
+type CreateStreamingMountPointMultiStreamMessage struct {
+	MessageRequest
+	Type  string                  `json:"type"`
+	Id    int                     `json:"id"`
+	Media []StreamingMediaOptions `json:"media"`
+}
+
+//StreamingMediaOptions ...
+type StreamingMediaOptions struct {
+	Type     string `json:"type"`
+	Mid      string `json:"mid"`
+	Label    string `json:"label"`
+	Port     int    `json:"port"`
+	RtcpPort int    `json:"rtcpport"`
+	Pt       int    `json:"pt"`
+	RtpMap   string `json:"rtpmap"`
+}
+
 //PublishVideoRoomMessage for janus
 type PublishVideoRoomMessage struct {
 	MessageRequest
@@ -178,4 +215,9 @@ type AttachToPublishersRoomMessage struct {
 type ListParticipantsInRoomMessage struct {
 	MessageRequest
 	Room int `json:"room"`
+}
+
+//ListMountpoints ...
+type ListMountpoints struct {
+	MessageRequest
 }
