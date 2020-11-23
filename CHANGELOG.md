@@ -8,3 +8,4 @@
 * add travis yml
 * close the session.events chan in StopPoll
 * declare message types here instead of LS
+* Add types for use with the streaming plugin
