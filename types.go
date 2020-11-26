@@ -211,6 +211,19 @@ type AttachToPublishersRoomMessage struct {
 	Feed int `json:"feed"` //unique ID of the publisher to subscribe to
 }
 
+//WatchStreamMessage for janus
+type WatchStreamMessage struct {
+	MessageRequest
+	OfferAudio bool `json:"offer_audio"`
+	OfferVideo bool `json:"offer_video"`
+}
+
+//AttachToStreamingMountpointMessage for janus
+type AttachToStreamingMountpointMessage struct {
+	WatchStreamMessage
+	Id int `json:"id"` // unique ID of the mountpoint to subscribe to
+}
+
 //ListParticipantsInRoomMessage ...
 type ListParticipantsInRoomMessage struct {
 	MessageRequest
