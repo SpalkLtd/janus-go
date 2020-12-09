@@ -234,3 +234,9 @@ type ListParticipantsInRoomMessage struct {
 type ListMountpoints struct {
 	MessageRequest
 }
+
+//GetMountpointInfo ...
+type GetMountpointInfo struct {
+	MessageRequest
+	Id int `json:"id"` //id of the mountpoint
+}
