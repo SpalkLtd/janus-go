@@ -177,6 +177,12 @@ type CreateStreamingMountPointMultiStreamMessage struct {
 	Media []StreamingMediaOptions `json:"media"`
 }
 
+//DestroyStreamingMountPointMessage ...
+type DestroyStreamingMountPointMessage struct {
+	MessageRequest
+	Id int `json:"id"`
+}
+
 //StreamingMediaOptions ...
 type StreamingMediaOptions struct {
 	Type     string `json:"type"`
