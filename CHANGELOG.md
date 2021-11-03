@@ -9,4 +9,5 @@
 * close the session.events chan in StopPoll
 * declare message types here instead of LS
 * Add types for use with the streaming plugin
-* Add types for removing the mountpoints with the streaming plugin
+* Add types for removing the mountpoints with the streaming 
+* Make session.LongPollForEvents a no op when using the ws client

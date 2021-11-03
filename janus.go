@@ -534,10 +534,16 @@ type Session struct {
 
 //LongPollForEvents ...
 func (session *Session) LongPollForEvents() {
+	if session.gateway.conn != nil {
+		//we don't need to long poll when using the ws client
+		return
+	}
+
 	msg := map[string]interface{}{
 		"session_id": strconv.Itoa(int(session.id)),
 		"janus":      "ping",
 	}
+
 	client := session.gateway.httpConn
 	path := session.gateway.httpPath
 
