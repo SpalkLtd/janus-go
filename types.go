@@ -220,8 +220,9 @@ type AttachToPublishersRoomMessage struct {
 //WatchStreamMessage for janus
 type WatchStreamMessage struct {
 	MessageRequest
-	OfferAudio bool `json:"offer_audio"`
-	OfferVideo bool `json:"offer_video"`
+	Media      []string `json:"media"`
+	OfferAudio bool     `json:"offer_audio"`
+	OfferVideo bool     `json:"offer_video"`
 }
 
 //AttachToStreamingMountpointMessage for janus
