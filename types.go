@@ -140,18 +140,18 @@ type Candidate struct {
 	Completed     bool   `json:"completed"`
 }
 
-//MessageRequest ...
+// MessageRequest ...
 type MessageRequest struct {
 	Request string `json:"request"`
 }
 
-//CreateRoomMessage creates the janus video room
+// CreateRoomMessage creates the janus video room
 type CreateRoomMessage struct {
 	MessageRequest
 	Room int `json:"room"`
 }
 
-//CreateStreamingMountPointMessage creates the janus streaming mountpoint
+// CreateStreamingMountPointMessage creates the janus streaming mountpoint
 type CreateStreamingMountPointMessage struct {
 	MessageRequest
 	Audio         bool   `json:"audio"`
@@ -159,31 +159,33 @@ type CreateStreamingMountPointMessage struct {
 	Data          bool   `json:"data"`
 	Type          string `json:"type"`
 	Id            int    `json:"id"`
+	RtpSync       bool   `json:"rtp_sync"`
 	AudioPort     string `json:"audioport"`
 	AudioRtcpPort string `json:"audiortcpport"`
 	AudioPt       string `json:"audiopt"`
 	AudioRtpMap   string `json:"audiortpmap"`
 	VideoPort     string `json:"videoport"`
 	VideoRtcpPort string `json:"videortcpport"`
-	VideoPt       string `json:"audiopt"`
+	VideoPt       string `json:"videopt"`
 	VideoRtpMap   string `json:"videortpmap"`
 }
 
-//CreateStreamingMountPointMultiStreamMessage ...
+// CreateStreamingMountPointMultiStreamMessage ...
 type CreateStreamingMountPointMultiStreamMessage struct {
 	MessageRequest
-	Type  string                  `json:"type"`
-	Id    int                     `json:"id"`
-	Media []StreamingMediaOptions `json:"media"`
+	Type    string                  `json:"type"`
+	Id      int                     `json:"id"`
+	RtpSync bool                    `json:"rtp_sync"`
+	Media   []StreamingMediaOptions `json:"media"`
 }
 
-//DestroyStreamingMountPointMessage ...
+// DestroyStreamingMountPointMessage ...
 type DestroyStreamingMountPointMessage struct {
 	MessageRequest
 	Id int `json:"id"`
 }
 
-//StreamingMediaOptions ...
+// StreamingMediaOptions ...
 type StreamingMediaOptions struct {
 	Type     string `json:"type"`
 	Mid      string `json:"mid"`
@@ -194,7 +196,7 @@ type StreamingMediaOptions struct {
 	RtpMap   string `json:"rtpmap"`
 }
 
-//PublishVideoRoomMessage for janus
+// PublishVideoRoomMessage for janus
 type PublishVideoRoomMessage struct {
 	MessageRequest
 	Audio   bool   `json:"audio"`
@@ -203,7 +205,7 @@ type PublishVideoRoomMessage struct {
 	Display string `json:"display"`
 }
 
-//JoinRoomMessage for janus
+// JoinRoomMessage for janus
 type JoinRoomMessage struct {
 	MessageRequest
 	Display string `json:"display"`
@@ -211,13 +213,13 @@ type JoinRoomMessage struct {
 	Room    int    `json:"room"`
 }
 
-//AttachToPublishersRoomMessage for janus
+// AttachToPublishersRoomMessage for janus
 type AttachToPublishersRoomMessage struct {
 	JoinRoomMessage
 	Feed int `json:"feed"` //unique ID of the publisher to subscribe to
 }
 
-//WatchStreamMessage for janus
+// WatchStreamMessage for janus
 type WatchStreamMessage struct {
 	MessageRequest
 	Media      []string `json:"media"`
@@ -225,24 +227,24 @@ type WatchStreamMessage struct {
 	OfferVideo bool     `json:"offer_video"`
 }
 
-//AttachToStreamingMountpointMessage for janus
+// AttachToStreamingMountpointMessage for janus
 type AttachToStreamingMountpointMessage struct {
 	WatchStreamMessage
 	Id int `json:"id"` // unique ID of the mountpoint to subscribe to
 }
 
-//ListParticipantsInRoomMessage ...
+// ListParticipantsInRoomMessage ...
 type ListParticipantsInRoomMessage struct {
 	MessageRequest
 	Room int `json:"room"`
 }
 
-//ListMountpoints ...
+// ListMountpoints ...
 type ListMountpoints struct {
 	MessageRequest
 }
 
-//GetMountpointInfo ...
+// GetMountpointInfo ...
 type GetMountpointInfo struct {
 	MessageRequest
 	Id int `json:"id"` //id of the mountpoint
