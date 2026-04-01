@@ -185,15 +185,23 @@ type DestroyStreamingMountPointMessage struct {
 	Id int `json:"id"`
 }
 
+// StreamingMediaExtmap represents an RTP header extension mapping for a streaming mountpoint media stream.
+type StreamingMediaExtmap struct {
+	Extmap    int    `json:"extmap"`
+	URI       string `json:"uri"`
+	Direction string `json:"direction,omitempty"`
+}
+
 // StreamingMediaOptions ...
 type StreamingMediaOptions struct {
-	Type     string `json:"type"`
-	Mid      string `json:"mid"`
-	Label    string `json:"label"`
-	Port     int    `json:"port"`
-	RtcpPort int    `json:"rtcpport"`
-	Pt       int    `json:"pt"`
-	RtpMap   string `json:"rtpmap"`
+	Type     string                 `json:"type"`
+	Mid      string                 `json:"mid"`
+	Label    string                 `json:"label"`
+	Port     int                    `json:"port"`
+	RtcpPort int                    `json:"rtcpport"`
+	Pt       int                    `json:"pt"`
+	RtpMap   string                 `json:"rtpmap"`
+	Extmap   []StreamingMediaExtmap `json:"extmap,omitempty"`
 }
 
 // PublishVideoRoomMessage for janus
