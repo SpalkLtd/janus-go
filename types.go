@@ -173,10 +173,11 @@ type CreateStreamingMountPointMessage struct {
 // CreateStreamingMountPointMultiStreamMessage ...
 type CreateStreamingMountPointMultiStreamMessage struct {
 	MessageRequest
-	Type    string                  `json:"type"`
-	Id      int                     `json:"id"`
-	RtpSync bool                    `json:"rtp_sync"`
-	Media   []StreamingMediaOptions `json:"media"`
+	Type                    string                  `json:"type"`
+	Id                      int                     `json:"id"`
+	RtpSync                 bool                    `json:"rtp_sync"`
+	AbsCaptureTimeSrcExtID  int                     `json:"abscapturetime_src_ext_id,omitempty"`
+	Media                   []StreamingMediaOptions `json:"media"`
 }
 
 // DestroyStreamingMountPointMessage ...
@@ -185,23 +186,15 @@ type DestroyStreamingMountPointMessage struct {
 	Id int `json:"id"`
 }
 
-// StreamingMediaExtmap represents an RTP header extension mapping for a streaming mountpoint media stream.
-type StreamingMediaExtmap struct {
-	Extmap    int    `json:"extmap"`
-	URI       string `json:"uri"`
-	Direction string `json:"direction,omitempty"`
-}
-
 // StreamingMediaOptions ...
 type StreamingMediaOptions struct {
-	Type     string                 `json:"type"`
-	Mid      string                 `json:"mid"`
-	Label    string                 `json:"label"`
-	Port     int                    `json:"port"`
-	RtcpPort int                    `json:"rtcpport"`
-	Pt       int                    `json:"pt"`
-	RtpMap   string                 `json:"rtpmap"`
-	Extmap   []StreamingMediaExtmap `json:"extmap,omitempty"`
+	Type     string `json:"type"`
+	Mid      string `json:"mid"`
+	Label    string `json:"label"`
+	Port     int    `json:"port"`
+	RtcpPort int    `json:"rtcpport"`
+	Pt       int    `json:"pt"`
+	RtpMap   string `json:"rtpmap"`
 }
 
 // PublishVideoRoomMessage for janus
